@@ -5,7 +5,7 @@
 Summary:   NetApp's SDK for interacting with filers
 Name:      NetApp-SDK
 Version:   5.6
-Release:   1%{dist}
+Release:   1%{?dist}
 License:   NetApp SDK License Agreement v11-04-14
 Group:     Development/Libraries
 Source:    http://mysupport.netapp.com/NOW/download/software/nmsdk/%{version}/netapp-manageability-sdk-%{version}.zip
