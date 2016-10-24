@@ -1,0 +1,14 @@
+#
+# I opened a case with NTAP support on this
+# $response is double-declared and will error at you under use strict
+#
+--- lib/perl/NetApp/NaServer-old.pm	2016-09-27 16:24:40.000000000 +0000
++++ lib/perl/NetApp/NaServer.pm	2016-10-24 05:56:54.975154221 +0000
+@@ -880,7 +880,6 @@
+ 	my $line;
+ 	my $sock_err = undef;
+ 	my $content_length = 0;
+-	my $response;
+ 	my $hex_length;
+	
+ 	## Perl socket timeout has no effect during socket read.
