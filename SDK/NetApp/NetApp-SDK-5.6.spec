@@ -5,7 +5,7 @@
 Summary:   NetApp's SDK for interacting with filers
 Name:      NetApp-SDK
 Version:   5.6
-Release:   1%{?dist}
+Release:   2%{?dist}
 License:   NetApp SDK License Agreement v11-04-14
 Group:     Development/Libraries
 Source:    http://mysupport.netapp.com/NOW/download/software/nmsdk/%{version}/netapp-manageability-sdk-%{version}.zip
@@ -36,6 +36,9 @@ The NetApp Manageability SDK provides resources to develop applications that mon
 %{__mkdir} -p $RPM_BUILD_ROOT%{perl_vendorlib}/%{name}
 %{__cp} lib/perl/NetApp/NaServer.pm $RPM_BUILD_ROOT%{perl_vendorlib}/%{name}
 %{__cp} lib/perl/NetApp/NaElement.pm $RPM_BUILD_ROOT%{perl_vendorlib}/%{name}
+%{__cp} lib/perl/NetApp/OCUMAPI.pm $RPM_BUILD_ROOT%{perl_vendorlib}/%{name}
+%{__cp} lib/perl/NetApp/OntapClusterAPI.pm $RPM_BUILD_ROOT%{perl_vendorlib}/%{name}
+# You could add more files here, maybe even wildcard it.  But I like a tidy directory.
 
 %clean
 %{__rm} -rf $RPM_BUILD_ROOT
