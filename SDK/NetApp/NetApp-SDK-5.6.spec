@@ -5,11 +5,14 @@
 Summary:   NetApp's SDK for interacting with filers
 Name:      NetApp-SDK
 Version:   5.6
-Release:   2%{?dist}
+Release:   3%{?dist}
 License:   NetApp SDK License Agreement v11-04-14
 Group:     Development/Libraries
 Source:    http://mysupport.netapp.com/NOW/download/software/nmsdk/%{version}/netapp-manageability-sdk-%{version}.zip
-Patch0:    %{name}-%{version}-perlfix.patch
+Patch0:    %{name}-%{version}-perlfix-NaServer-doubleresponse.patch
+Patch1:    %{name}-%{version}-perlfix-NaServer-length-scalar.patch
+Patch2:    %{name}-%{version}-perlfix-NaServer-Socket6.patch
+Patch3:    %{name}-%{version}-perlfix-OCUMAPI.patch
 URL:       http://support.netapp.com
 BuildRoot: %(mktemp -ud %{_tmppath}/%{name}-%{version}-%{release}-XXXXXX)
 Vendor:    Mozilla IT
@@ -29,6 +32,9 @@ The NetApp Manageability SDK provides resources to develop applications that mon
 %prep
 %setup -q -n netapp-manageability-sdk-%{version}
 %patch0 -p0
+%patch1 -p0
+%patch2 -p0
+%patch3 -p0
 
 %build
 
@@ -48,7 +54,7 @@ The NetApp Manageability SDK provides resources to develop applications that mon
 %{perl_vendorlib}/%{name}/*
 
 %changelog
-* Wed Oct 24 2016 Greg Cox <gcox@mozilla.com> 5.6
+* Wed Dec 20 2016 Greg Cox <gcox@mozilla.com> 5.6
 - SDK 5.6
 
 * Wed May 4 2016 Greg Cox <gcox@mozilla.com> 5.4P2

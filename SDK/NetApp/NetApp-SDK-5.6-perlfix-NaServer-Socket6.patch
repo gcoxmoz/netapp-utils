@@ -1,0 +1,39 @@
+#
+# I have not opened a case with NTAP support on this
+# In CentOS7 and the like, Socket6 may be required even though straight Perl
+# has ipv6 definitions built in, so the second require here causes...
+#
+# Subroutine NaServer::pack_sockaddr_in6 redefined at /usr/share/perl5/vendor_perl/Exporter.pm line 66.
+#  at /usr/lib64/perl5/vendor_perl/NetApp-SDK/NaServer.pm line 69.
+# 
+# ... when 'use warnings' is in effect.
+# 
+--- lib/perl/NetApp/NaServer-old.pm	2016-12-20 23:23:32.120266533 +0000
++++ lib/perl/NetApp/NaServer.pm	2016-12-20 23:33:28.768353186 +0000
+@@ -65,18 +65,18 @@
+ 	# onwards and Pre 5.14 versions require Socket6 module installed.
+ 	# First prefer using Socket6 module routines on all versions if it
+ 	# is available, else prefer using Socket module from 5.14 version onwards.
+-	if (eval "require Socket6") {
+-		Socket6->import(qw(getaddrinfo pack_sockaddr_in6 in6addr_any));
+-		$na_in6addr_any = Socket6::in6addr_any();
+-		$na_can_use_socket6 = 1;
++	if ($] >=  5.014) {
++		Socket->import(qw(getaddrinfo pack_sockaddr_in6 IN6ADDR_ANY));
++		$na_in6addr_any = &Socket::IN6ADDR_ANY;
+ 		$na_can_use_ipv6 = 1;
+ 	} else {
+-		if ($] >=  5.014) {
+-			Socket->import(qw(getaddrinfo pack_sockaddr_in6 IN6ADDR_ANY));
+-			$na_in6addr_any = &Socket::IN6ADDR_ANY;
++		if (eval "require Socket6") {
++			Socket6->import(qw(getaddrinfo pack_sockaddr_in6 in6addr_any));
++			$na_in6addr_any = Socket6::in6addr_any();
++			$na_can_use_socket6 = 1;
+ 			$na_can_use_ipv6 = 1;
+ 		}
+-	}
++	} 
+ };
+ 
+ #============================================================#

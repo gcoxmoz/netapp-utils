@@ -1,0 +1,15 @@
+#
+# I have not opened a case with NTAP support on this
+# Certain times an empty $flag can make it through, which is noticed under use strict
+#
+--- lib/perl/NetApp/OCUMAPI-old.pm	2016-09-27 17:06:10.000000000 +0000
++++ lib/perl/NetApp/OCUMAPI.pm	2016-11-18 19:05:55.794856254 +0000
+@@ -5375,7 +5375,7 @@
+ 
+ sub IsArrayFlag {
+     my ($self, $flag) = @_;
+-    return ($flag & FIELD_ARRAY) == FIELD_ARRAY;
++    return $flag ? (($flag & FIELD_ARRAY) == FIELD_ARRAY) : 0;
+ }
+ 
+ sub IsEncryptedFlag {

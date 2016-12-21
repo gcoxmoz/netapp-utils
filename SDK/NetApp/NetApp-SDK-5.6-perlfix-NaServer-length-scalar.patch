@@ -1,0 +1,15 @@
+#
+# I have not opened a case with NTAP support on this
+# This emits a warning, since it's arguably a mistake
+#
+--- lib/perl/NetApp/NaServer-old.pm	2016-12-20 23:00:28.551813172 +0000
++++ lib/perl/NetApp/NaServer.pm	2016-12-20 23:01:09.808933407 +0000
+@@ -1159,7 +1159,7 @@
+ 	my @header;	
+ 	@header = Net::SSLeay::ssl_read_until($ssl, "\r\n", $HTTP_HEADER_BUFFER_SIZE);
+ 	
+-	my $len = length(@header);
++	my $len = scalar(@header);
+ 	if(! defined $len ) {
+ 		next if $!{EINTR} || $!{EAGAIN} || $!{EWOULDBLOCK} ;
+ 		die "Incomplete Response : $!";	
