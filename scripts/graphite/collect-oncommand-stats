@@ -3,167 +3,218 @@ use IO::Socket;
 use strict;
 use Getopt::Long;
 
-#
-# puppetized script for peeling information out of OnCommand Unified Manager
-# and dumping it into our graphite relay box.
-#
-
 use lib '/usr/lib64/perl5/vendor_perl/NetApp-SDK';
 use NaServer;
 use NaElement;
 
+use constant SERVER_TYPE => 'OCUM';
 my $graphite_server = 'graphite-relay.private.<%= scope.lookupvar('::datacenter') %>.mozilla.com';
-my $DFM_SERVER = 'oncommand.ops.<%= scope.lookupvar('::datacenter') %>.mozilla.com';
+my ($DFM_SERVER, );
 my $username = '<%= scope.function_hiera(['secrets_netapp_ro_zapi_username']) %>';
 my $password = '<%= scope.function_hiera(['secrets_netapp_ro_zapi_password']) %>';
+if (SERVER_TYPE eq 'DFM') {
+    $DFM_SERVER = 'oncommand.ops.<%= scope.lookupvar('::datacenter') %>.mozilla.com';
+} elsif (SERVER_TYPE eq 'OCUM') {
+    $DFM_SERVER = 'oncommand1.ops.<%= scope.lookupvar('::datacenter') %>.mozilla.com';
+} else {
+    die "Bad server type.\n";
+    # This is the main place we check this.  We have either-or logic later, so if a 3rd option appears, be careful.
+}
 
 my $debug = 0;
+my $help = 0;
 my $send_to_graphite = 1;
+my $timestamp = 1;
+# ^ Why?  So that you can diff outputs run at different times, and compare interesting things.
+
+my $usage =<<"EOF";
+Usage: $0 [options]
+
+  --debug         (print what you send)
+  --nosend        (defaults to sending)
+  --notimestamp   (defaults to timestamps)
+EOF
+
 GetOptions(
-  'debug!'       => \$debug,
-  'send!'        => \$send_to_graphite,
+    'debug!'       => \$debug,
+    'help!'        => \$help,
+    'send!'        => \$send_to_graphite,
+    'timestamp!'   => \$timestamp,
 ) or die "Unable to parse options.\n";
 
-
+if (!$timestamp and ($send_to_graphite || !$debug)) {
+    print "Sorry, you can't decline timestamps and still send to graphite; that breaks spec.\n";
+    exit;
+} elsif ($help) {
+    print $usage;
+    exit;
+}
 
 my $time_of_record = time();
 
 # Globals.  Sue me.
 my $server;
-my $server_type = 'DFM';
 my $graphite_socket = undef;
 
 sub line_out ($$) {
-  my( $k, $v, ) = @_;
-  my $toprintline = $k.' '.$v.' '.$time_of_record."\n";
-  if (defined $graphite_socket) {
-    print STDOUT $toprintline if ($debug);
-    print $graphite_socket $toprintline;
-  } else {
-    print STDOUT $toprintline;
-  }
+    my( $k, $v, ) = @_;
+    my $toprintline = $k.' '.$v.($timestamp ? ' '.$time_of_record : '')."\n";
+    if (defined $graphite_socket) {
+        print STDOUT $toprintline if ($debug);
+        print $graphite_socket $toprintline;
+    } else {
+        print STDOUT $toprintline;
+    }
 }
 
 sub list_aggrs () {
-my $output;
-if ($server_type eq 'DFM') {
+    my $output;
+    my ($records, $tag);
+    if (SERVER_TYPE eq 'DFM') {
+        $output = $server->invoke('aggregate-list-info-iter-start');
+        print('Error : '. $output->results_reason()."\n" ) and exit(-2) if ( $output->results_status() eq 'failed' );
+        $records = $output->child_get_string('records');
+        $tag     = $output->child_get_string('tag');
+    } elsif (SERVER_TYPE eq 'OCUM') {
+        $output = $server->aggregate_iter();
+        $records = $output->{'records'};
+    }
 
-  $output = $server->invoke('aggregate-list-info-iter-start');
-  print('Error : '. $output->results_reason()."\n" ) and exit(-2) if ( $output->results_status() eq 'failed' );
-  my $records = $output->child_get_string('records');
-  my $tag     = $output->child_get_string('tag');
 
-  if ( not $records ) {
-    print "\nNo aggrs to display\n";
-  } else {
-    $output = $server->invoke('aggregate-list-info-iter-next', 'maximum' => $records, 'tag' => $tag );
-    print('Error : '. $output->results_reason()."\n" ) and exit(-2) if ( $output->results_status() eq 'failed' );
-    my $stat  = $output->child_get('aggregates') or exit 0 if ($output);
-    my @aggrs = $stat->children_get() or exit 0 if ($stat);
+    if ( not $records ) {
+        print "\nNo aggrs to display\n";
+        return;
+    }
+
+    my @aggrs;
+    if (SERVER_TYPE eq 'DFM') {
+        $output = $server->invoke('aggregate-list-info-iter-next', 'maximum' => $records, 'tag' => $tag );
+        print('Error : '. $output->results_reason()."\n" ) and exit(-2) if ( $output->results_status() eq 'failed' );
+        my $stat  = $output->child_get('aggregates') or exit 0 if ($output);
+        @aggrs = $stat->children_get() or exit 0 if ($stat);
+    } elsif (SERVER_TYPE eq 'OCUM') {
+        my $aggrs_ref = $records->{'aggregate-info'};
+        @aggrs = @$aggrs_ref;
+    }
+
 
     my %sums = ();
     foreach my $aggr_obj (@aggrs) {
-       my $aggr_name      =  $aggr_obj->child_get_string('aggregate-name');  # this is nodename:aggrname
-       my ($node, $aggr, ) = split m#:#, $aggr_name, 2;
-       next if ($aggr =~ m#_aggr0$#); # IMPROVEME, local-to-moz hackery
-       # TRIBAL: skip if 'test' is in the aggr name
-       next if ($aggr =~ m#test#i);
-       (my $cluster = $node)  =~ s#-node\d+##; # IMPROVEME, local-to-moz hackery
-       # desired output storage.netapp.CLUSTER.nodes.NODE.aggregates.AGGR.item
-       my $base_cluster_name_to_print = 'storage.netapp.'.$cluster;
-       my $base_node_name_to_print = $base_cluster_name_to_print.'.nodes.'.$node;
-       my $base_aggr_name_to_print = $base_node_name_to_print.'.aggregates.'.$aggr;
+        my $aggr_name      =  (SERVER_TYPE eq 'DFM') ? $aggr_obj->child_get_string('aggregate-name') : $aggr_obj->{'aggregate-name'};
+        # this is nodename:aggrname
+        my ($node, $aggr, ) = split m#:#, $aggr_name, 2;
+        next if ($aggr =~ m#_aggr0$#); # IMPROVEME, local-to-moz hackery
+        # TRIBAL: skip if 'test' is in the aggr name
+        next if ($aggr =~ m#test#i);
 
-       my %aggr_size_attrs = (
-       'size-used'  => 'bytes-used',
-       'size-total' => 'bytes-total',
-       );
-       my $aggr_size_obj  = $aggr_obj->child_get('aggregate-size');
-       foreach my $attr (sort keys %aggr_size_attrs) {
-         my $size = $aggr_size_obj->child_get_string($attr);
-         line_out($base_aggr_name_to_print.'.'.$aggr_size_attrs{$attr}, $size);
-         $sums{$base_node_name_to_print.'.'.$aggr_size_attrs{$attr}} += $size;
-         $sums{$base_cluster_name_to_print.'.'.$aggr_size_attrs{$attr}} += $size;
-       }
+        # IMPROVEME, local-to-moz hackery
+        my $node_nodenum = '';
+        my $aggr_nodenum = '';
+        (my $cluster = $node)  =~ s#-node(\d+)##;
+        if ($node =~ m#node(\d+)#) { $node_nodenum = $1; }
+        if ($aggr =~ m#node(\d+)#) { $aggr_nodenum = $1; }
+        next if ( $node_nodenum && $aggr_nodenum && ($node_nodenum != $aggr_nodenum ));
+        # ^ This removes the tracking during SFO/CFO.
+
+        # desired output storage.netapp.CLUSTER.nodes.NODE.aggregates.AGGR.item
+        my $base_cluster_name_to_print = 'storage.netapp.'.$cluster;
+        my $base_node_name_to_print = $base_cluster_name_to_print.'.nodes.'.$node;
+        my $base_aggr_name_to_print = $base_node_name_to_print.'.aggregates.'.$aggr;
+
+        my %aggr_size_attrs = (
+        'size-used'  => 'bytes-used',
+        'size-total' => 'bytes-total',
+        );
+        my $aggr_size_obj  = (SERVER_TYPE eq 'DFM') ? $aggr_obj->child_get('aggregate-size') : $aggr_obj->{'aggregate-size'};
+        foreach my $attr (sort keys %aggr_size_attrs) {
+            my $size = (SERVER_TYPE eq 'DFM') ? $aggr_size_obj->child_get_string($attr) : $aggr_size_obj->{$attr};
+            line_out($base_aggr_name_to_print.'.'.$aggr_size_attrs{$attr}, $size);
+            $sums{$base_node_name_to_print.'.'.$aggr_size_attrs{$attr}} += $size;
+            $sums{$base_cluster_name_to_print.'.'.$aggr_size_attrs{$attr}} += $size;
+        }
     }
     foreach my $lineout (sort keys %sums) {
        line_out($lineout, $sums{$lineout});
     }
-  }
-  $output = $server->invoke( "aggregate-list-info-iter-end", "tag", $tag );
-  print('Error : '. $output->results_reason()."\n" ) and exit(-2) if ( $output->results_status() eq 'failed' );
-
-} elsif ($server_type eq 'OCUM') {
-  die "Not developed yet.\n";
-} else {
-  die "Bad server type.\n";
-}
+    if (SERVER_TYPE eq 'DFM') {
+        $output = $server->invoke( "aggregate-list-info-iter-end", "tag", $tag );
+        print('Error : '. $output->results_reason()."\n" ) and exit(-2) if ( $output->results_status() eq 'failed' );
+    }
 
 }
 
 
 sub list_volumes () {
-my $output;
-if ($server_type eq 'DFM') {
+    my $output;
+    my ($records, $tag);
+    if (SERVER_TYPE eq 'DFM') {
+        $output = $server->invoke('volume-list-info-iter-start');
+        print('Error : '. $output->results_reason()."\n" ) and exit(-2) if ( $output->results_status() eq 'failed' );
+        $records = $output->child_get_string('records');
+        $tag     = $output->child_get_string('tag');
+    } elsif (SERVER_TYPE eq 'OCUM') {
+        $output = $server->volume_iter();
+        $records = $output->{'records'};
+    }
 
-  $output = $server->invoke('volume-list-info-iter-start');
-  print('Error : '. $output->results_reason()."\n" ) and exit(-2) if ( $output->results_status() eq 'failed' );
-  my $records = $output->child_get_string('records');
-  my $tag     = $output->child_get_string('tag');
+    if ( not $records ) {
+        print "\nNo vols to display\n";
+        return;
+    }
 
-  if ( not $records ) {
-    print "\nNo vols to display\n";
-  } else {
-    $output = $server->invoke('volume-list-info-iter-next', 'maximum' => $records, 'tag' => $tag );
-    print('Error : '. $output->results_reason()."\n" ) and exit(-2) if ( $output->results_status() eq 'failed' );
-    my $stat  = $output->child_get('volumes') or exit 0 if ($output);
-    my @vols = $stat->children_get() or exit 0 if ($stat);
+    my @vols;
+    if (SERVER_TYPE eq 'DFM') {
+        $output = $server->invoke('volume-list-info-iter-next', 'maximum' => $records, 'tag' => $tag );
+        print('Error : '. $output->results_reason()."\n" ) and exit(-2) if ( $output->results_status() eq 'failed' );
+        my $stat  = $output->child_get('volumes') or exit 0 if ($output);
+        @vols = $stat->children_get() or exit 0 if ($stat);
+    } elsif (SERVER_TYPE eq 'OCUM') {
+        my $vols_ref = $records->{'volume-info'};
+        @vols = @$vols_ref;
+    }
+
 
     my %sums = ();
     for my $vol_obj (@vols) {
-       my $vol_name      =  $vol_obj->child_get_string('volume-name');
-       # IMPROVEME: skip DP/LS
-       next if ($vol_name =~ m#vol0$#);
-       next if ($vol_name =~ m#/root$#);
-       next if ($vol_name =~ m#_ls\d$#);
-       # TRIBAL: skip if 'test' is in the vol name or vfiler name
-       next if ($vol_name =~ m#test#i);
-       # IMPROVEME: assumes format
-       my ($vfiler, $vol, ) = split m#:/#, $vol_name, 2;
+        my $vol_name       =  (SERVER_TYPE eq 'DFM') ? $vol_obj->child_get_string('volume-name') : $vol_obj->{'volume-name'};
+        # IMPROVEME: skip DP/LS
+        next if ($vol_name =~ m#vol0$#);
+        next if ($vol_name =~ m#/root$#);
+        next if ($vol_name =~ m#_ls\d$#);
+        # TRIBAL: skip if 'test' is in the vol name or vfiler name
+        next if ($vol_name =~ m#test#i);
+        # IMPROVEME: assumes format
+        my ($vfiler, $vol, ) = split m#:/#, $vol_name, 2;
 
-       my $aggr_name     =  $vol_obj->child_get_string('aggregate-name');  # this is nodename:aggrname
-       my ($node, $aggr, ) = split m#:#, $aggr_name, 2;
-       # IMPROVEME:
-       (my $cluster = $node)  =~ s#-node\d+##; # IMPROVEME, local-to-moz hackery
-       # desired output storage.netapp.CLUSTER.vfilers.VFILER.volumes.VOLNAME.item
-       my $base_cluster_name_to_print = 'storage.netapp.'.$cluster;
-       my $base_vfiler_name_to_print = $base_cluster_name_to_print.'.vfilers.'.$vfiler;
-       my $base_vol_name_to_print = $base_vfiler_name_to_print.'.volumes.'.$vol;
+        my $aggr_name     =  (SERVER_TYPE eq 'DFM') ? $vol_obj->child_get_string('aggregate-name') : $vol_obj->{'flexible-volume-info'}->{'aggregate-name'};
+        # this is nodename:aggrname
+        my ($node, $aggr, ) = split m#:#, $aggr_name, 2;
+        # IMPROVEME:
+        (my $cluster = $node)  =~ s#-node\d+##; # IMPROVEME, local-to-moz hackery
+        # desired output storage.netapp.CLUSTER.vfilers.VFILER.volumes.VOLNAME.item
+        my $base_cluster_name_to_print = 'storage.netapp.'.$cluster;
+        my $base_vfiler_name_to_print = $base_cluster_name_to_print.'.vfilers.'.$vfiler;
+        my $base_vol_name_to_print = $base_vfiler_name_to_print.'.volumes.'.$vol;
 
-       my %vol_size_attrs = (
-       'afs-used'  => 'bytes-used',
-       'afs-total' => 'bytes-total',
-       );
-       my $vol_size_obj  = $vol_obj->child_get('volume-size');
-       foreach my $attr (sort keys %vol_size_attrs) {
-         my $size = $vol_size_obj->child_get_string($attr);
-         line_out($base_vol_name_to_print.'.'.$vol_size_attrs{$attr}, $size);
-         $sums{$base_vfiler_name_to_print.'.'.$vol_size_attrs{$attr}} += $size;
-         #Don't add against the cluster here: already done back in the aggr check.
-       }
+        my %vol_size_attrs = (
+            'afs-used'  => 'bytes-used',
+            'afs-total' => 'bytes-total',
+        );
+        my $vol_size_obj  = (SERVER_TYPE eq 'DFM') ? $vol_obj->child_get('volume-size') : $vol_obj->{'volume-size'};
+        foreach my $attr (sort keys %vol_size_attrs) {
+            my $size = (SERVER_TYPE eq 'DFM') ? $vol_size_obj->child_get_string($attr) : $vol_size_obj->{$attr};
+            line_out($base_vol_name_to_print.'.'.$vol_size_attrs{$attr}, $size);
+            $sums{$base_vfiler_name_to_print.'.'.$vol_size_attrs{$attr}} += $size;
+            #Don't add against the cluster here: already done back in the aggr check.
+        }
     }
     foreach my $lineout (sort keys %sums) {
-       line_out($lineout, $sums{$lineout});
+        line_out($lineout, $sums{$lineout});
     }
-  }
-  $output = $server->invoke( "volume-list-info-iter-end", "tag", $tag );
-  print('Error : '. $output->results_reason()."\n" ) and exit(-2) if ( $output->results_status() eq 'failed' );
-
-} elsif ($server_type eq 'OCUM') {
-  die "Not developed yet.\n";
-} else {
-  die "Bad server type.\n";
-}
+    if (SERVER_TYPE eq 'DFM') {
+        $output = $server->invoke( "volume-list-info-iter-end", "tag", $tag );
+        print('Error : '. $output->results_reason()."\n" ) and exit(-2) if ( $output->results_status() eq 'failed' );
+    }
 
 }
 
@@ -173,15 +224,15 @@ sub main() {
     $server->set_style('LOGIN');
     $server->set_admin_user($username, $password);
     $server->set_transport_type('HTTPS');
-    $server->set_server_type($server_type);
+    $server->set_server_type(SERVER_TYPE);
     if ($send_to_graphite) {
-      $graphite_socket = new IO::Socket::INET ( PeerAddr => $graphite_server, PeerPort => '2003', Proto => 'tcp', );
-      die "Could not create socket: $!\n" unless $graphite_socket;
+        $graphite_socket = new IO::Socket::INET ( PeerAddr => $graphite_server, PeerPort => '2003', Proto => 'tcp', );
+        die "Could not create socket: $!\n" unless $graphite_socket;
     }
     list_aggrs();
     list_volumes();
     if ($send_to_graphite) {
-      close($graphite_socket);
+        close($graphite_socket);
     }
 }
 
