@@ -2,9 +2,9 @@
 # Certain times an empty $flag can make it through, which is noticed under use strict
 # This was reported to NTAP and is BURT 1115364.
 #
---- lib/perl/NetApp/OCUMAPI-old.pm	2017-04-24 04:43:45.000000000 +0000
-+++ lib/perl/NetApp/OCUMAPI.pm	2017-08-25 03:03:48.316206368 +0000
-@@ -5460,7 +5460,7 @@
+--- lib/perl/NetApp/OntapClusterAPI-old.pm	2017-04-24 04:43:43.000000000 +0000
++++ lib/perl/NetApp/OntapClusterAPI.pm	2017-09-26 05:02:26.837593834 +0000
+@@ -101229,7 +101229,7 @@
  
  sub IsArrayFlag {
      my ($self, $flag) = @_;
