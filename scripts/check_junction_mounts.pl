@@ -3,8 +3,9 @@
 # gcox@mozilla
 #
 use strict;
+use warnings;
 use Getopt::Long;
-$ENV{'PATH'} = '';  # Taint-check safety
+local $ENV{'PATH'} = '';  # Taint-check safety
 
 #
 # Designed to report issues with NetApp junction mounts
@@ -57,38 +58,45 @@ if (!@ARGV) {
 }
 
 my $unchecked_mountpath = shift @ARGV;
-   $unchecked_mountpath =~ m#^(/[-/_a-zA-Z0-9]+)#;  #Could be overrestrictive, but, avoiding dangerous input
-my $mountpath = $1;
-if (!$mountpath) {
+my $mountpath = undef;
+if ($unchecked_mountpath =~ m#^(/[-/_a-zA-Z0-9]+)#) {
+    # Could be overrestrictive, but, avoiding dangerous input
+    $mountpath = $1;
+} else {
     print "Didn't safely regex-match a mount path.  Funky character in the name?\n";
     exit 3;
-} elsif (!(-d $mountpath)) {
+}
+
+if (!(-d $mountpath)) {
     print "$mountpath is not a directory.\n";
     exit 3;
 }
 
 my $overall_exit_code = 0;
-sub set_exit_code_warning () {
+sub set_exit_code_warning {
     $overall_exit_code = 1 if ($overall_exit_code < 1);
+    return 1;
 }
-sub set_exit_code_critical () {
+sub set_exit_code_critical {
     $overall_exit_code = 2 if ($overall_exit_code < 2);
+    return 1;
 }
 
 my $insane_percentage = 1001+int(rand(100));
 my @mounts = ();
-open  PROCMOUNTS, '</proc/mounts' or die "Can't open /proc/mounts: $!\n";
-foreach my $line (<PROCMOUNTS>) {
-    next unless ($line =~ m#^\S+\s+($mountpath\S*)\s#);
-    push @mounts, $1;
+open  my $procmounts_fh, '<', '/proc/mounts' or die "Can't open /proc/mounts: $!\n";
+while (my $line = <$procmounts_fh>) {
+    if ($line =~ m#^\S+\s+($mountpath\S*)\s#) {
+        push @mounts, $1;
+    }
 }
-close PROCMOUNTS or die "Can't close /proc/mounts: $!\n";
+close $procmounts_fh or die "Can't close /proc/mounts: $!\n";
 
 
 # Sample:
 # Filesystem         1024-blocks      Used Available Capacity Mounted on
 # server:/some/dir 689944080 387792528 246956016      62% /mnt/point
-sub df_mount($$) {
+sub df_mount {
     my ($fs, $space_or_inodes, ) = @_;
     my %df_commands = (
         'space'  => ['/bin/df', '-kP',],
@@ -103,18 +111,18 @@ sub df_mount($$) {
 
     eval {
 
-      sub pipe_from_fork ($) {
+      sub pipe_from_fork {
           my $parent = shift;
           no strict 'refs';
-              pipe $parent, my $child or die;
+              pipe $parent, my $child or die "Could not open pipe: $!\n";
           use strict 'refs';
           my $pid = fork();
-          die "fork() failed: $!" unless defined $pid;
+          die "fork() failed: $!\n" unless defined $pid;
           if ($pid) {
               close $child;
           } else {
               close $parent;
-              open(STDOUT, '>&=' . fileno($child)) or die;
+              open(STDOUT, '>&=', fileno($child)) or die "Could not open against $child: $!\n";
           }
           $pid;
       }
