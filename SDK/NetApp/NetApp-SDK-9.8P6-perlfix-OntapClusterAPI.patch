@@ -1,0 +1,15 @@
+#
+# Certain times an empty $flag can make it through, which is noticed under use strict
+# This was reported to NTAP and is BURT 1115364.
+#
+--- lib/perl/NetApp/OntapClusterAPI-old.pm	2018-10-24 04:49:08.000000000 +0000
++++ lib/perl/NetApp/OntapClusterAPI.pm	2018-12-31 17:04:03.964955587 +0000
+@@ -118097,7 +118097,7 @@
+
+ sub IsArrayFlag {
+     my ($self, $flag) = @_;
+-    return ($flag & FIELD_ARRAY) == FIELD_ARRAY;
++    return $flag ? (($flag & FIELD_ARRAY) == FIELD_ARRAY) : 0;
+ }
+
+ sub IsEncryptedFlag {
